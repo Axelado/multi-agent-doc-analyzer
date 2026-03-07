@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  # =============================================
+  # PostgreSQL — Base relationnelle
+  # =============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: nlp_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nlp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nlp_secret_password}
+      POSTGRES_DB: ${POSTGRES_DB:-nlp_platform}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nlp_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============================================
+  # Qdrant — Base vectorielle
+  # =============================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: nlp_qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============================================
+  # Redis — Broker pour Celery
+  # =============================================
+  redis:
+    image: redis:7-alpine
+    container_name: nlp_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  redis_data:

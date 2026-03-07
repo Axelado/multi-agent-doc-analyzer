@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "analyse-rapport-multi-agent"
+version = "0.1.0"
+description = "Plateforme NLP self-hosted multi-agent pour l'analyse de rapports économiques/financiers"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+
+dependencies = [
+    # --- API ---
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "python-multipart>=0.0.9",
+
+    # --- Base de données ---
+    "sqlalchemy[asyncio]>=2.0.25",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+
+    # --- LLM & Agents ---
+    "langchain>=0.3.0",
+    "langchain-community>=0.3.0",
+    "langgraph>=0.2.0",
+    "langchain-ollama>=0.2.0",
+
+    # --- Embeddings & ML ---
+    "sentence-transformers>=3.0.0",
+    "transformers>=4.40.0",
+    "torch>=2.1.0",
+
+    # --- Vector store ---
+    "qdrant-client>=1.7.0",
+
+    # --- Document parsing ---
+    "pymupdf>=1.23.0",
+    "docling>=2.0.0",
+
+    # --- Task queue ---
+    "celery[redis]>=5.3.0",
+    "redis>=5.0.0",
+
+    # --- Dashboard ---
+    "streamlit>=1.30.0",
+    "plotly>=5.18.0",
+
+    # --- Utilitaires ---
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.26.0",
+    "tenacity>=8.2.0",
+    "structlog>=24.1.0",
+    "langdetect>=1.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+]
+monitoring = [
+    "langfuse>=2.0.0",
+    "prometheus-client>=0.19.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
