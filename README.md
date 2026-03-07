@@ -147,6 +147,14 @@ streamlit run dashboard/app.py
 | `GET` | `/api/stats` | Statistiques globales |
 | `GET` | `/api/health` | État des services |
 
+## 🛡️ Fiabilité (P0)
+
+- Statuts détaillés par étape: `queued` → `parse` → `index` → `analyze` → `verify` → `edit` → `done` (ou `error`)
+- Champ `failed_step` persisté en base pour diagnostiquer précisément l'étape en échec
+- Retry par étape (pas de retry global Celery) avec backoff exponentiel borné
+- Timeouts explicites par étape + annulation propre de la coroutine en timeout
+- Dépendances critiques figées: `qdrant-client==1.17.0`, `transformers==4.57.6`, `torch==2.10.0`
+
 ## 📦 Structure du Projet
 
 ```

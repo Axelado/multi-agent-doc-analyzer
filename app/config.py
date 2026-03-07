@@ -81,6 +81,22 @@ class Settings(BaseSettings):
     top_k_rerank: int = 5
     nli_threshold: float = 0.7
 
+    # --- Fiabilité pipeline ---
+    step_timeout_parse_sec: int = 120
+    step_timeout_index_sec: int = 240
+    step_timeout_analyze_sec: int = 300
+    step_timeout_verify_sec: int = 300
+    step_timeout_edit_sec: int = 180
+
+    step_retry_parse: int = 2
+    step_retry_index: int = 2
+    step_retry_analyze: int = 2
+    step_retry_verify: int = 2
+    step_retry_edit: int = 2
+
+    step_backoff_base_sec: int = 5
+    step_backoff_max_sec: int = 60
+
     def ensure_dirs(self) -> None:
         Path(self.upload_dir).mkdir(parents=True, exist_ok=True)
 

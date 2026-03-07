@@ -1,5 +1,6 @@
 """Session SQLAlchemy async."""
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
@@ -39,3 +40,6 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS failed_step VARCHAR(32)")
+        )

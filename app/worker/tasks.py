@@ -54,8 +54,6 @@ def run_async(coro):
 @celery_app.task(
     bind=True,
     name="process_document",
-    max_retries=2,
-    default_retry_delay=30,
 )
 def process_document_task(self, doc_id: str, file_path: str) -> dict:
     """
@@ -64,19 +62,29 @@ def process_document_task(self, doc_id: str, file_path: str) -> dict:
     Cette tâche est exécutée en arrière-plan par le worker Celery.
     """
     import structlog
+    from app.agents.orchestrator import PipelineExecutionError, get_orchestrator
 
     logger = structlog.get_logger(__name__)
     logger.info("celery_task_start", doc_id=doc_id, file_path=file_path)
 
     try:
-        # Mettre à jour le statut en "processing"
-        run_async(_update_status(doc_id, "processing"))
-
         # Exécuter le pipeline multi-agent
-        from app.agents.orchestrator import get_orchestrator
+        async def _on_step_start(step: str) -> None:
+            await _update_status(
+                doc_id,
+                step,
+                failed_step=None,
+                error_message=None,
+            )
 
         orchestrator = get_orchestrator()
-        result = run_async(orchestrator.run(file_path, doc_id))
+        result = run_async(
+            orchestrator.run(
+                file_path=file_path,
+                doc_id=doc_id,
+                on_step_start=_on_step_start,
+            )
+        )
 
         # Sauvegarder les résultats en base
         run_async(_save_results(doc_id, result))
@@ -90,23 +98,56 @@ def process_document_task(self, doc_id: str, file_path: str) -> dict:
 
         return {
             "doc_id": doc_id,
-            "status": "completed",
+            "status": "done",
             "confidence": result.get("confidence_global"),
+        }
+
+    except PipelineExecutionError as exc:
+        logger.error(
+            "celery_task_pipeline_error",
+            doc_id=doc_id,
+            failed_step=exc.failed_step,
+            error=str(exc),
+        )
+        run_async(
+            _update_status(
+                doc_id,
+                "error",
+                failed_step=exc.failed_step,
+                error_message=str(exc),
+            )
+        )
+        return {
+            "doc_id": doc_id,
+            "status": "error",
+            "failed_step": exc.failed_step,
+            "error": str(exc),
         }
 
     except Exception as exc:
         logger.error("celery_task_error", doc_id=doc_id, error=str(exc))
-        run_async(_update_status(doc_id, "error", error_message=str(exc)))
+        run_async(
+            _update_status(
+                doc_id,
+                "error",
+                failed_step="unknown",
+                error_message=str(exc),
+            )
+        )
 
-        # Retry si possible
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc)
-
-        return {"doc_id": doc_id, "status": "error", "error": str(exc)}
+        return {
+            "doc_id": doc_id,
+            "status": "error",
+            "failed_step": "unknown",
+            "error": str(exc),
+        }
 
 
 async def _update_status(
-    doc_id: str, status: str, error_message: str | None = None
+    doc_id: str,
+    status: str,
+    failed_step: str | None = None,
+    error_message: str | None = None,
 ) -> None:
     """Mettre à jour le statut d'un document en base."""
     import uuid
@@ -119,6 +160,7 @@ async def _update_status(
             session,
             uuid.UUID(doc_id),
             status=status,
+            failed_step=failed_step,
             error_message=error_message,
         )
         await session.commit()

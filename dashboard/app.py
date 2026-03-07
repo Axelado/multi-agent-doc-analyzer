@@ -198,9 +198,16 @@ elif page == "📋 Analyses":
         table_data = []
         for doc in docs:
             status_icon = {
+                "done": "✅",
                 "completed": "✅",
-                "processing": "⏳",
+                "queued": "🕐",
                 "pending": "🕐",
+                "parse": "⏳",
+                "index": "⏳",
+                "analyze": "⏳",
+                "verify": "⏳",
+                "edit": "⏳",
+                "processing": "⏳",
                 "error": "❌",
             }.get(doc["status"], "❓")
             num_pages = doc.get("num_pages")
@@ -219,7 +226,8 @@ elif page == "📋 Analyses":
         st.dataframe(table_data, width="stretch", hide_index=True)
 
         # Auto-refresh
-        if any(d["status"] in ("pending", "processing") for d in docs):
+        running_statuses = {"queued", "pending", "parse", "index", "analyze", "verify", "edit", "processing"}
+        if any(d["status"] in running_statuses for d in docs):
             st.info("⏳ Des analyses sont en cours. Rafraîchissement automatique dans 10s...")
             time.sleep(10)
             st.rerun()
@@ -266,7 +274,7 @@ elif page == "📈 Statistiques":
         if data and data.get("documents"):
             completed = [
                 d for d in data["documents"]
-                if d["status"] == "completed" and d.get("confidence_global") is not None
+                if d["status"] in ("done", "completed") and d.get("confidence_global") is not None
             ]
             if completed:
                 fig_hist = px.bar(
@@ -311,9 +319,12 @@ elif page == "🔍 Détail":
                     f"{doc['processing_time_sec']:.1f}s" if doc.get("processing_time_sec") else "N/A",
                 )
 
+                if doc.get("failed_step"):
+                    st.warning(f"Étape en échec: {doc['failed_step']}")
+
                 st.markdown("---")
 
-                if doc["status"] == "completed":
+                if doc["status"] in ("done", "completed"):
                     # Résumé
                     st.subheader("📝 Résumé")
                     st.write(doc.get("summary", "Pas de résumé disponible"))
@@ -370,7 +381,7 @@ elif page == "🔍 Détail":
                 elif doc["status"] == "error":
                     st.error(f"❌ Erreur: {doc.get('error_message', 'Erreur inconnue')}")
 
-                elif doc["status"] in ("pending", "processing"):
+                elif doc["status"] in ("queued", "pending", "parse", "index", "analyze", "verify", "edit", "processing"):
                     st.info("⏳ Analyse en cours...")
                     time.sleep(5)
                     st.rerun()

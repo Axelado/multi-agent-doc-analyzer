@@ -55,7 +55,8 @@ async def _save_file(file: UploadFile, doc_id: str) -> tuple[str, int]:
     upload_dir = Path(settings.upload_dir) / doc_id
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    file_path = upload_dir / file.filename
+    filename = file.filename or "uploaded_file"
+    file_path = upload_dir / filename
     content = await file.read()
     file_size = len(content)
 
@@ -79,6 +80,10 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload unitaire + lancement de l'analyse."""
+    filename = file.filename or ""
+    if not filename:
+        raise HTTPException(status_code=400, detail="Nom de fichier manquant")
+
     file_type = _validate_file(file)
     doc_id = str(uuid.uuid4())
 
@@ -88,7 +93,7 @@ async def upload_document(
     # Créer l'entrée en base
     doc = await create_document(
         db,
-        filename=file.filename,
+        filename=filename,
         file_path=file_path,
         file_size=file_size,
         file_type=file_type,
@@ -99,13 +104,13 @@ async def upload_document(
 
     process_document_task.delay(str(doc.id), file_path)
 
-    logger.info("document_uploaded", doc_id=str(doc.id), filename=file.filename)
+    logger.info("document_uploaded", doc_id=str(doc.id), filename=filename)
 
     return UploadResponse(
         doc_id=doc.id,
-        filename=file.filename,
-        status="pending",
-        message="Document uploadé. Analyse en cours...",
+        filename=filename,
+        status="queued",
+        message="Document uploadé. Analyse mise en file d'attente...",
     )
 
 
@@ -118,7 +123,11 @@ async def upload_batch(
     uploads = []
 
     for file in files:
+        filename = file.filename or ""
         try:
+            if not filename:
+                raise HTTPException(status_code=400, detail="Nom de fichier manquant")
+
             file_type = _validate_file(file)
             doc_id = str(uuid.uuid4())
 
@@ -126,7 +135,7 @@ async def upload_batch(
 
             doc = await create_document(
                 db,
-                filename=file.filename,
+                filename=filename,
                 file_path=file_path,
                 file_size=file_size,
                 file_type=file_type,
@@ -139,8 +148,8 @@ async def upload_batch(
             uploads.append(
                 UploadResponse(
                     doc_id=doc.id,
-                    filename=file.filename,
-                    status="pending",
+                    filename=filename,
+                    status="queued",
                     message="Analyse en cours...",
                 )
             )
@@ -148,7 +157,7 @@ async def upload_batch(
             uploads.append(
                 UploadResponse(
                     doc_id=uuid.uuid4(),
-                    filename=file.filename or "unknown",
+                    filename=filename or "unknown",
                     status="error",
                     message=str(e.detail),
                 )

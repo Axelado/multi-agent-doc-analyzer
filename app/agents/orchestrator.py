@@ -1,228 +1,214 @@
-"""Orchestrateur multi-agent avec LangGraph."""
+"""Orchestrateur multi-agent fiabilisé (retries/timeout par étape)."""
 
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import Any, TypedDict
+from contextlib import suppress
+from typing import Any, Awaitable, Callable, Coroutine, TypeVar
 
 import structlog
-from langgraph.graph import END, StateGraph
 
 from app.agents.analyst_agent import AnalystAgent
 from app.agents.editor_agent import EditorAgent
 from app.agents.index_agent import IndexAgent
 from app.agents.parser_agent import ParserAgent
 from app.agents.verifier_agent import VerifierAgent
+from app.config import get_settings
 from app.models.schemas import Chunk, ParsedDocument
 
 logger = structlog.get_logger(__name__)
 
+T = TypeVar("T")
+StepStatusCallback = Callable[[str], Awaitable[None]]
 
-class PipelineState(TypedDict, total=False):
-    """État partagé entre les agents du pipeline."""
 
-    # Entrées
-    file_path: str
-    doc_id: str
+class PipelineExecutionError(RuntimeError):
+    """Erreur enrichie avec l'étape ayant échoué."""
 
-    # Sorties intermédiaires
-    parsed_document: ParsedDocument | None
-    chunks: list[Chunk]
-    draft_analysis: dict
-    verified_analysis: dict
-
-    # Sortie finale
-    final_result: dict
-
-    # Métadonnées
-    start_time: float
-    error: str | None
-    current_step: str
+    def __init__(self, failed_step: str, message: str):
+        super().__init__(message)
+        self.failed_step = failed_step
 
 
 class AgentOrchestrator:
-    """Pipeline multi-agent orchestré par LangGraph."""
+    """Pipeline multi-agent avec retries/backoff/timeout par étape."""
 
     def __init__(self) -> None:
+        self.settings = get_settings()
         self.parser_agent = ParserAgent()
         self.index_agent = IndexAgent()
         self.analyst_agent = AnalystAgent()
         self.verifier_agent = VerifierAgent()
         self.editor_agent = EditorAgent()
-        self._graph = self._build_graph()
 
-    def _build_graph(self) -> Any:
-        """Construire le graphe LangGraph."""
-        workflow = StateGraph(PipelineState)
+    def _get_step_timeout(self, step: str) -> int:
+        mapping = {
+            "parse": self.settings.step_timeout_parse_sec,
+            "index": self.settings.step_timeout_index_sec,
+            "analyze": self.settings.step_timeout_analyze_sec,
+            "verify": self.settings.step_timeout_verify_sec,
+            "edit": self.settings.step_timeout_edit_sec,
+        }
+        return max(1, mapping.get(step, 120))
 
-        # Ajouter les nœuds
-        workflow.add_node("parse", self._parse_step)
-        workflow.add_node("index", self._index_step)
-        workflow.add_node("analyze", self._analyze_step)
-        workflow.add_node("verify", self._verify_step)
-        workflow.add_node("edit", self._edit_step)
+    def _get_step_retry(self, step: str) -> int:
+        mapping = {
+            "parse": self.settings.step_retry_parse,
+            "index": self.settings.step_retry_index,
+            "analyze": self.settings.step_retry_analyze,
+            "verify": self.settings.step_retry_verify,
+            "edit": self.settings.step_retry_edit,
+        }
+        return max(1, mapping.get(step, 1))
 
-        # Définir le flux séquentiel
-        workflow.set_entry_point("parse")
-        workflow.add_edge("parse", "index")
-        workflow.add_edge("index", "analyze")
-        workflow.add_edge("analyze", "verify")
-        workflow.add_edge("verify", "edit")
-        workflow.add_edge("edit", END)
+    def _get_backoff(self, attempt: int) -> int:
+        delay = self.settings.step_backoff_base_sec * (2 ** max(0, attempt - 1))
+        return int(min(delay, self.settings.step_backoff_max_sec))
 
-        return workflow.compile()
+    async def _run_step_with_retry(
+        self,
+        *,
+        step: str,
+        doc_id: str,
+        operation: Callable[[], Coroutine[Any, Any, T]],
+        on_step_start: StepStatusCallback | None,
+    ) -> T:
+        """Exécuter une étape avec timeout et retries stricts."""
+        max_attempts = self._get_step_retry(step)
+        timeout_sec = self._get_step_timeout(step)
+        last_error: Exception | None = None
 
-    async def _parse_step(self, state: PipelineState) -> dict:
-        """Étape 1 : Parsing du document."""
-        logger.info("pipeline_step", step="parse", doc_id=state["doc_id"])
-        try:
-            parsed = await self.parser_agent.run(
-                file_path=state["file_path"],
-                doc_id=state["doc_id"],
+        for attempt in range(1, max_attempts + 1):
+            if on_step_start is not None:
+                await on_step_start(step)
+
+            logger.info(
+                "pipeline_step_start",
+                doc_id=doc_id,
+                step=step,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                timeout_sec=timeout_sec,
             )
-            return {
-                "parsed_document": parsed,
-                "current_step": "parse_complete",
-            }
-        except Exception as e:
-            logger.error("parse_step_error", error=str(e))
-            return {"error": f"Erreur parsing: {str(e)}"}
 
-    async def _index_step(self, state: PipelineState) -> dict:
-        """Étape 2 : Indexation sémantique."""
-        logger.info("pipeline_step", step="index", doc_id=state["doc_id"])
-        if state.get("error"):
-            return {}
+            task: asyncio.Task[T] | None = None
+            try:
+                task = asyncio.create_task(operation())
+                result = await asyncio.wait_for(task, timeout=timeout_sec)
+                logger.info(
+                    "pipeline_step_complete",
+                    doc_id=doc_id,
+                    step=step,
+                    attempt=attempt,
+                )
+                return result
 
-        try:
-            parsed = state["parsed_document"]
-            chunks = await self.index_agent.run(parsed)
-            return {
-                "chunks": chunks,
-                "current_step": "index_complete",
-            }
-        except Exception as e:
-            logger.error("index_step_error", error=str(e))
-            return {"error": f"Erreur indexation: {str(e)}"}
+            except asyncio.TimeoutError as exc:
+                if task is not None and not task.done():
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+                last_error = RuntimeError(
+                    f"Timeout étape '{step}' après {timeout_sec}s"
+                )
 
-    async def _analyze_step(self, state: PipelineState) -> dict:
-        """Étape 3 : Analyse (brouillon)."""
-        logger.info("pipeline_step", step="analyze", doc_id=state["doc_id"])
-        if state.get("error"):
-            return {}
+            except asyncio.CancelledError:
+                if task is not None and not task.done():
+                    task.cancel()
+                raise
 
-        try:
-            parsed = state["parsed_document"]
-            chunks = state["chunks"]
-            draft = await self.analyst_agent.run(parsed, chunks)
-            return {
-                "draft_analysis": draft,
-                "current_step": "analyze_complete",
-            }
-        except Exception as e:
-            logger.error("analyze_step_error", error=str(e))
-            return {"error": f"Erreur analyse: {str(e)}"}
+            except Exception as exc:
+                last_error = exc
 
-    async def _verify_step(self, state: PipelineState) -> dict:
-        """Étape 4 : Vérification factuelle."""
-        logger.info("pipeline_step", step="verify", doc_id=state["doc_id"])
-        if state.get("error"):
-            return {}
+            if attempt < max_attempts:
+                backoff_sec = self._get_backoff(attempt)
+                logger.warning(
+                    "pipeline_step_retry",
+                    doc_id=doc_id,
+                    step=step,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    backoff_sec=backoff_sec,
+                    error=str(last_error),
+                )
+                await asyncio.sleep(backoff_sec)
 
-        try:
-            draft = state["draft_analysis"]
-            chunks = state["chunks"]
-            verified = await self.verifier_agent.run(
-                draft_analysis=draft,
-                doc_id=state["doc_id"],
-                chunks=chunks,
-            )
-            return {
-                "verified_analysis": verified,
-                "current_step": "verify_complete",
-            }
-        except Exception as e:
-            logger.error("verify_step_error", error=str(e))
-            return {"error": f"Erreur vérification: {str(e)}"}
+        error_text = str(last_error) if last_error else "erreur inconnue"
+        raise PipelineExecutionError(step, f"Erreur {step}: {error_text}")
 
-    async def _edit_step(self, state: PipelineState) -> dict:
-        """Étape 5 : Édition finale."""
-        logger.info("pipeline_step", step="edit", doc_id=state["doc_id"])
-        if state.get("error"):
-            return {}
-
-        try:
-            verified = state["verified_analysis"]
-            parsed = state["parsed_document"]
-            final = await self.editor_agent.run(verified, parsed)
-
-            # Ajouter le temps de traitement
-            elapsed = time.time() - state.get("start_time", time.time())
-            final["processing_time_sec"] = round(elapsed, 2)
-            final["doc_id"] = state["doc_id"]
-
-            return {
-                "final_result": final,
-                "current_step": "complete",
-            }
-        except Exception as e:
-            logger.error("edit_step_error", error=str(e))
-            return {"error": f"Erreur édition: {str(e)}"}
-
-    async def run(self, file_path: str, doc_id: str) -> dict:
+    async def run(
+        self,
+        file_path: str,
+        doc_id: str,
+        on_step_start: StepStatusCallback | None = None,
+    ) -> dict:
         """Exécuter le pipeline complet d'analyse."""
         logger.info("pipeline_start", doc_id=doc_id, file_path=file_path)
         start_time = time.time()
 
-        initial_state: PipelineState = {
-            "file_path": file_path,
-            "doc_id": doc_id,
-            "parsed_document": None,
-            "chunks": [],
-            "draft_analysis": {},
-            "verified_analysis": {},
-            "final_result": {},
-            "start_time": start_time,
-            "error": None,
-            "current_step": "starting",
-        }
+        try:
+            parsed = await self._run_step_with_retry(
+                step="parse",
+                doc_id=doc_id,
+                operation=lambda: self.parser_agent.run(file_path=file_path, doc_id=doc_id),
+                on_step_start=on_step_start,
+            )
 
-        # Exécuter le graphe
-        final_state = await self._graph.ainvoke(initial_state)
+            chunks = await self._run_step_with_retry(
+                step="index",
+                doc_id=doc_id,
+                operation=lambda: self.index_agent.run(parsed),
+                on_step_start=on_step_start,
+            )
+
+            draft = await self._run_step_with_retry(
+                step="analyze",
+                doc_id=doc_id,
+                operation=lambda: self.analyst_agent.run(parsed, chunks),
+                on_step_start=on_step_start,
+            )
+
+            verified = await self._run_step_with_retry(
+                step="verify",
+                doc_id=doc_id,
+                operation=lambda: self.verifier_agent.run(
+                    draft_analysis=draft,
+                    doc_id=doc_id,
+                    chunks=chunks,
+                ),
+                on_step_start=on_step_start,
+            )
+
+            final = await self._run_step_with_retry(
+                step="edit",
+                doc_id=doc_id,
+                operation=lambda: self.editor_agent.run(verified, parsed),
+                on_step_start=on_step_start,
+            )
+
+        except PipelineExecutionError:
+            raise
+        except Exception as exc:
+            raise PipelineExecutionError("unknown", str(exc)) from exc
 
         elapsed = time.time() - start_time
-
-        if final_state.get("error"):
-            logger.error(
-                "pipeline_failed",
-                doc_id=doc_id,
-                error=final_state["error"],
-                elapsed=round(elapsed, 2),
-            )
-            raise RuntimeError(final_state["error"])
-
-        result = final_state.get("final_result", {})
-        parsed = final_state.get("parsed_document")
-
-        # Enrichir le résultat avec les métadonnées
-        result["doc_id"] = doc_id
-        result["processing_time_sec"] = round(elapsed, 2)
-
-        if parsed:
-            result["_metadata"] = {
-                "num_pages": parsed.num_pages,
-                "language": parsed.language,
-                "parsed_metadata": parsed.metadata,
-            }
+        final["doc_id"] = doc_id
+        final["processing_time_sec"] = round(elapsed, 2)
+        final["_metadata"] = {
+            "num_pages": parsed.num_pages,
+            "language": parsed.language,
+            "parsed_metadata": parsed.metadata,
+        }
 
         logger.info(
             "pipeline_complete",
             doc_id=doc_id,
             elapsed=round(elapsed, 2),
-            confidence=result.get("confidence_global"),
+            confidence=final.get("confidence_global"),
         )
 
-        return result
+        return final
 
 
 # Singleton
