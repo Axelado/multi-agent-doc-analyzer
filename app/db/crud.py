@@ -71,6 +71,7 @@ async def update_document_results(
     doc_id: uuid.UUID,
     *,
     summary: str,
+    section_summaries: list[dict],
     keywords: list[str],
     classification: dict,
     claims: list[dict],
@@ -83,6 +84,7 @@ async def update_document_results(
     doc = await db.get(Document, doc_id)
     if doc:
         doc.summary = summary
+        doc.section_summaries = section_summaries
         doc.keywords = keywords
         doc.classification = classification
         doc.claims = claims

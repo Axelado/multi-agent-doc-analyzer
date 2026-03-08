@@ -43,3 +43,6 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS failed_step VARCHAR(32)")
         )
+        await conn.execute(
+            text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS section_summaries JSONB")
+        )

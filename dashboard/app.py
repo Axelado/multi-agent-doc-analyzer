@@ -329,6 +329,18 @@ elif page == "🔍 Détail":
                     st.subheader("📝 Résumé")
                     st.write(doc.get("summary", "Pas de résumé disponible"))
 
+                    # Résumés par section
+                    st.subheader("📚 Résumés par section")
+                    section_summaries = doc.get("section_summaries") or []
+                    if section_summaries:
+                        for idx, section in enumerate(section_summaries, 1):
+                            title = section.get("section_title") or f"Partie {idx}"
+                            text = section.get("summary") or ""
+                            with st.expander(f"{idx}. {title}", expanded=False):
+                                st.write(text or "Résumé indisponible")
+                    else:
+                        st.info("Aucun résumé par section disponible.")
+
                     # Mots-clés
                     st.subheader("🏷️ Mots-clés")
                     keywords = doc.get("keywords", [])

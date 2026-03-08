@@ -25,6 +25,12 @@ RÈGLES ABSOLUES :
 Format de sortie OBLIGATOIRE :
 {
   "summary": "résumé final...",
+    "section_summaries": [
+        {
+            "section_title": "Titre de section",
+            "summary": "Résumé de section final..."
+        }
+    ],
   "keywords": ["mot1", "mot2", ...],
   "classification": {
     "label": "catégorie",
@@ -102,6 +108,38 @@ class EditorAgent:
         except json.JSONDecodeError:
             return {}
 
+    def _normalize_section_summaries(self, section_summaries: object) -> list[dict[str, str]]:
+        if not isinstance(section_summaries, list):
+            return []
+
+        normalized_entries: list[dict[str, str]] = []
+        for idx, entry in enumerate(section_summaries, start=1):
+            if isinstance(entry, dict):
+                title = (
+                    entry.get("section_title")
+                    or entry.get("title")
+                    or entry.get("section")
+                    or f"Partie {idx}"
+                )
+                summary = entry.get("summary") or entry.get("text") or ""
+            else:
+                title = f"Partie {idx}"
+                summary = str(entry)
+
+            title_clean = " ".join(str(title).split()).strip()
+            summary_clean = " ".join(str(summary).split()).strip()
+            if not summary_clean:
+                continue
+
+            normalized_entries.append(
+                {
+                    "section_title": title_clean or f"Partie {idx}",
+                    "summary": summary_clean,
+                }
+            )
+
+        return normalized_entries
+
     async def run(
         self, verified: dict, parsed: ParsedDocument
     ) -> dict:
@@ -120,6 +158,9 @@ class EditorAgent:
             logger.warning("no_supported_claims", doc_id=parsed.doc_id)
             return {
                 "summary": "Analyse non concluante : aucune affirmation n'a pu être vérifiée.",
+                "section_summaries": self._normalize_section_summaries(
+                    verified.get("section_summaries", [])
+                ),
                 "keywords": verified.get("keywords", []),
                 "classification": verified.get("classification", {"label": "Non classifié", "score": 0.0}),
                 "claims": [],
@@ -144,6 +185,9 @@ AFFIRMATIONS VÉRIFIÉES (à inclure) :
 AFFIRMATIONS REJETÉES (à EXCLURE absolument) :
 {rejected_text}
 
+RÉSUMÉS PAR SECTION (brouillon) :
+{json.dumps(verified.get('section_summaries', []), ensure_ascii=False)}
+
 MOTS-CLÉS CANDIDATS :
 {json.dumps(verified.get('keywords', []), ensure_ascii=False)}
 
@@ -153,7 +197,8 @@ CLASSIFICATION PROPOSÉE :
 Score de confiance calculé : {confidence}
 
 Produis maintenant la version FINALE en JSON avec uniquement les informations vérifiées.
-Le résumé doit être réécrit de manière claire, sans inclure d'affirmations rejetées."""
+Le résumé doit être réécrit de manière claire, sans inclure d'affirmations rejetées.
+Inclure aussi "section_summaries" avec un résumé pour chaque partie pertinente."""
 
         response = await self.llm.generate_structured(
             prompt=prompt,
@@ -165,6 +210,9 @@ Le résumé doit être réécrit de manière claire, sans inclure d'affirmations
         # Garantir la structure
         final = {
             "summary": result.get("summary", verified.get("summary", "")),
+            "section_summaries": self._normalize_section_summaries(
+                result.get("section_summaries", verified.get("section_summaries", []))
+            ),
             "keywords": result.get("keywords", verified.get("keywords", [])),
             "classification": result.get(
                 "classification",
@@ -196,6 +244,7 @@ Le résumé doit être réécrit de manière claire, sans inclure d'affirmations
             doc_id=parsed.doc_id,
             confidence=confidence,
             num_final_claims=len(formatted_claims),
+            num_sections=len(final.get("section_summaries", [])),
         )
 
         return final

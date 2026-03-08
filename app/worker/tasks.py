@@ -180,6 +180,7 @@ async def _save_results(doc_id: str, result: dict) -> None:
             session,
             uuid.UUID(doc_id),
             summary=result.get("summary", ""),
+            section_summaries=result.get("section_summaries", []),
             keywords=result.get("keywords", []),
             classification=result.get("classification", {}),
             claims=result.get("claims", []),

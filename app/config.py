@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     analyst_summary_target_words: int = 300
     analyst_summary_min_words: int = 180
     analyst_summary_retry_count: int = 1
+    analyst_section_summary_max: int = 12
 
     # --- Fiabilité pipeline ---
     step_timeout_parse_sec: int = 120

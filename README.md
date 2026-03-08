@@ -219,6 +219,16 @@ Le pipeline garantit la fiabilité grâce à :
 {
   "doc_id": "uuid",
   "summary": "Résumé vérifié du document...",
+  "section_summaries": [
+    {
+      "section_title": "Contexte macroéconomique",
+      "summary": "Résumé de cette partie du document..."
+    },
+    {
+      "section_title": "Perspectives sectorielles",
+      "summary": "Résumé de cette partie du document..."
+    }
+  ],
   "keywords": ["économie", "croissance", "inflation"],
   "classification": {
     "label": "Politique monétaire",

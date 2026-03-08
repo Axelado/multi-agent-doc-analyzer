@@ -184,6 +184,7 @@ class VerifierAgent:
             "claims_rejected": [c.model_dump() for c in claims_rejected],
             "summary_verified": summary_verified,
             "summary": draft_analysis.get("summary", ""),
+            "section_summaries": draft_analysis.get("section_summaries", []),
             "keywords": draft_analysis.get("keywords", []),
             "classification": draft_analysis.get("classification", {}),
         }
