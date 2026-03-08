@@ -25,8 +25,8 @@ class LLMService:
                 model=self.settings.ollama_model,
                 base_url=self.settings.ollama_base_url,
                 temperature=0.1,
-                num_ctx=4096,
-                num_predict=2048,
+                num_ctx=self.settings.ollama_num_ctx,
+                num_predict=self.settings.ollama_num_predict,
             )
         return self._llm
 
@@ -35,7 +35,7 @@ class LLMService:
         """Générer une réponse à partir d'un prompt."""
         logger.debug("llm_generate", prompt_length=len(prompt))
         response = await self.llm.ainvoke(prompt)
-        result = response.content
+        result = str(self._content_to_text(response.content))
         logger.debug("llm_response", response_length=len(result))
         return result
 
@@ -48,7 +48,12 @@ class LLMService:
         messages.append(("human", prompt))
 
         response = await self.llm.ainvoke(messages)
-        return response.content
+        return str(self._content_to_text(response.content))
+
+    def _content_to_text(self, content: str | list[str | dict]) -> str:
+        if isinstance(content, str):
+            return content
+        return "\n".join(str(part) for part in content)
 
     async def health_check(self) -> bool:
         """Vérifier que Ollama est accessible."""

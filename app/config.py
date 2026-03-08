@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     # --- Ollama ---
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:7b-instruct-q4_K_M"
+    ollama_num_ctx: int = 6144
+    ollama_num_predict: int = 3072
 
     # --- Modèles HuggingFace (locaux) ---
     embedding_model: str = "BAAI/bge-m3"
@@ -80,6 +82,10 @@ class Settings(BaseSettings):
     top_k_retrieval: int = 10
     top_k_rerank: int = 5
     nli_threshold: float = 0.7
+    analyst_context_max_chars: int = 14000
+    analyst_summary_target_words: int = 300
+    analyst_summary_min_words: int = 180
+    analyst_summary_retry_count: int = 1
 
     # --- Fiabilité pipeline ---
     step_timeout_parse_sec: int = 120
